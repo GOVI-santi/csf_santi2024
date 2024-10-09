@@ -1,0 +1,166 @@
+---
+title: "CSF_technical_exercise"
+output: html_document
+date: '2024-10-09'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Defining working directory and libraries
+
+The defined folder (c_path) is used to read the inputs and output some results files if needed. Libraries used should be installed in advance.
+
+```{r working directory and libraries, include=FALSE}
+setwd("~/Desktop/data/az/")
+
+library(tximeta)
+library(VariantAnnotation)
+library("DESeq2")
+library("dplyr")
+library("ggplot2")
+library("RColorBrewer")
+library(rjson)
+library(pheatmap)
+
+c_path <- "/Users/santigonzalez/Desktop/projects/Carlos_Simon/data/"
+FOXP3 <- "ENSG00000049768"
+
+```
+
+## Salmon meta data
+
+After running Salmon to generate indexes and mapping reads to each of the genes we take a first look at the meta data to verify the robustness of the results
+
+```{r Salmon meta data}
+
+ids <- list.files(c_path, pattern = "v2_")
+
+lib_format <-lapply(ids,function(x){
+  fromJSON(file = paste0(c_path, "rna/", x, ".quant/lib_format_counts.json"))
+})
+
+par(las = 2, bty = "l", mar = c(8, 4, 4, 4))
+
+barplot(unlist(lapply(lib_format, function(x) x$strand_mapping_bias)),
+     pch = 16, ylim = c(0,1),
+     names.arg = sub(".fastq.gz", "", sub("v2_", "", ids)),
+     main = "Strand bias from Salmon")
+
+meta_info <-lapply(ids,function(x){
+  fromJSON(file = paste0(c_path, "rna/", x, ".quant/aux_info/meta_info.json"))
+})
+
+par(las = 2, bty = "l", mar = c(8, 4, 4, 4), mfrow = c(1,2))
+
+barplot(unlist(lapply(meta_info, function(x) x$num_processed)),
+        pch = 16, log = "y",
+        names.arg = sub(".fastq.gz", "", sub("v2_", "", ids)),
+        main = "Processed reads")
+barplot(unlist(lapply(meta_info, function(x) x$percent_mapped)),
+        pch = 16, ylim = c(0,100),
+        names.arg = sub(".fastq.gz", "", sub("v2_", "", ids)),
+        main = "Percentage mapped reads")
+
+```
+
+## Running DESeq2
+
+We perform a differential expression analysis between the treated and untreated samples using the tool DESeq2. Input data is read using tximeta directly from Salmon's output.
+
+Sample "SRR5223570" is removed from the analysis due to incosistencies in the quality controls.
+
+```{r DESeq2, echo=FALSE, error= FALSE}
+
+c_input <- read.csv(paste0(c_path,"data_input.txt"), sep="\t")
+
+c_input <- c_input[c_input$names != "SRR5223570",]
+
+makeLinkedTxome(indexDir=paste0(c_path, "salmon_index/"),
+                source="Local",
+                organism="Homo sapiens",
+                release="GRCh38",
+                genome="GRCh38",
+                fasta=paste0(c_path,"Homo_sapiens.GRCh38.dna_sm.primary_assembly.fa.gz"),
+                gtf=paste0(c_path,"Homo_sapiens.GRCh38.112.gtf.gz"),
+                write=FALSE)
+
+tx <- tximeta(c_input)
+gse <- summarizeToGene(tx)
+gse$condition <- factor(gse$condition)
+
+dds <- DESeqDataSet(gse, ~ condition)
+dds <- DESeq(dds)
+dds_out05 <- results(dds, alpha = 0.05)
+
+```
+
+## Expression of FOXP3
+
+Differences of expression between groups of the gene FOXP3
+
+```{r FOXP3, echo=TRUE}
+
+plotCounts(dds, gene=FOXP3, intgroup="condition", pch = 16,
+           main = "FOXP3 expression",
+           col = c("gray20", "chocolate")[dds$condition])
+
+dds_out05[rownames(dds_out05) == FOXP3,]
+
+```
+
+
+## List of differentially expressed genes
+
+Complete list of all genes differentially expressed between treated and untreated samples
+
+```{r DEA, echo=TRUE}
+
+dds_out05 <- dds_out05[order(dds_out05$padj, decreasing = FALSE),]
+dds_out05 <- dds_out05[!is.na(dds_out05$padj),]
+
+table(dds_out05$padj < 0.01)
+par(mfrow = c(1,1), mar = c(4,4,4,4))
+
+plotMA(dds_out05, main= "Differentially expressed genes between groups")
+
+plot(log(dds_out05$padj),
+     main= "Differentially expressed adjusted p-value",
+     pch = 16, ylab = "Log adjusted p-value",
+     xaxt = "n", xlab = "Genes",
+     col = rgb(0,0,0, alpha = 0.1))
+
+points(which(rownames(dds_out05) == FOXP3),
+       log(dds_out05$padj[rownames(dds_out05) == FOXP3]),
+       pch = 16,
+       col = "chocolate")
+abline(v=rev(which(dds_out05$padj<0.01))[1],
+       lty = 2,
+       col = "darkred")
+
+```
+
+## Agnostic clustering of samples
+
+As a control, an agnostic clustering of the different samples based on their gene expression is done. Data is generated using direct distance matrix computation of the regularized log tranformation of the expression data.
+
+```{r DEA, echo=FALSE}
+
+rld <- rlog(dds)
+sampleDists <- dist(t(assay(rld)))
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(rld$condition, rld$names, sep="-")
+colnames(sampleDistMatrix) <- NULL
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         display_numbers = TRUE,
+         col=hcl.colors(50, "BluYl"), alpha = 0.8)
+
+````
+
+
+
+

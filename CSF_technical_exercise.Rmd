@@ -145,7 +145,7 @@ abline(v=rev(which(dds_out05$padj<0.01))[1],
 
 As a control, an agnostic clustering of the different samples based on their gene expression is done. Data is generated using direct distance matrix computation of the regularized log tranformation of the expression data.
 
-```{r DEA, echo=FALSE}
+```{r Clustering, echo=FALSE}
 
 rld <- rlog(dds)
 sampleDists <- dist(t(assay(rld)))
